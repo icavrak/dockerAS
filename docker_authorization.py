@@ -25,6 +25,8 @@ import jwt
 AUTHORIZATION_ISSUER_DEFAULT = "dockertest.fairuse.org"
 AUTHORIZATION_PERIOD_DEFAULT = 300
 
+REFRESH_TOKEN_VALIDITY_PERIOD = 3600
+
 #DEFAULT VALUES FOR ANONYMOUS USER
 
 ANONYMOUS_AUTHORIZATION_TYPE = "NoAuthType"
@@ -87,7 +89,7 @@ def log(loglevel, message):
 
 def getRequestArgument(request, argumentName):
 
-    data = request.values[argumentName]
+  return request.values[argumentName]
 
 
 
@@ -95,6 +97,19 @@ def getRequestHeader(request, headerName):
 
     return request.headers[headerName]
 
+def getCurrentUnixTime():
+  d = datetime.datetime.utcnow()
+  unixtime = calendar.timegm(d.utctimetuple())
+  return unixtime
+
+def getRandomToken(username, service, client):
+  rnd_seed = calendar.timegm(datetime.datetime.utcnow().utctimetuple())
+  random.seed(rnd_seed)
+  token_digest_material = str(random.randint(0, rnd_seed)) + str(username) + str(service) + str(client)
+  digest = hashes.Hash(hashes.SHA256(), backend=default_backend())
+  digest.update(bytes(token_digest_material))
+  token_digest = digest.finalize()
+  return base64.b64encode(token_digest)
 
  
 # Authentication and authorization
@@ -114,23 +129,73 @@ def authenticateUser(username, password):
 
   return False
 
+
 def getRefreshToken(username, service, scope):
-  #Opaque token, should be user-, service and token specific
-  #and checked upon each bearer token refresh request
-  return base64.b64encode("Fixed Refresh Token")
+
+  refreshToken = getRandomToken(username, service, scope)
+
+  refreshTokenData = list()
+  refreshTokenData.append(username)
+  refreshTokenData.append(service)
+  refreshTokenData.append(getCurrentUnixTime() + REFRESH_TOKEN_VALIDITY_PERIOD)
+
+  refresh_token_registry[refreshToken] = refreshTokenData
+
+  return refreshToken 
+
+
+
+def checkRefreshToken(refreshToken, username=None, service=None):
+
+  #find refresh token in the refresh token registry
+  try:
+    ref_token_data = refresh_token_registry[refreshToken]
+  except KeyError:
+    return False 
+
+  #check for time validity expiration
+  now = getCurrentUnixTime()
+  if ref_token_data[2] < now:
+    return False 
+
+  #check for service equality 
+  if service != None:
+    if ref_token_data[1] != service:
+      return False
+
+  #check for user equality
+  if username != None:
+    if ref_token_data[0] != username:
+      return False
+
+  #all checks passed successfuly
+  return True
+
+def getUserFromRefreshToken(refreshToken, service=None, checkTokenValidity=True):
+
+  #check for token expiration
+  if checkTokenValidity == True and checkRefreshToken(refreshToken, None, service) == False:
+    return None  
+
+  try:
+    ref_token_data = refresh_token_registry[refreshToken]
+    return ref_token_data[0]
+  except KeyError:
+    return None
+   
 
 def getAllowedActions(username, service, scope):
 
   #default allowed action list is empty
   if scope != None:
-    allowedActions = ["push", "pull"]
+    allowedActions = ["pull", "push"]
   else: 
     allowedActions = []
 
   return allowedActions
 
 def getBearerToken(username, service, scope, client):
-  #TODO: implement JWT token
+  
   allowedActionList = getAllowedActions(username, service, scope)
 
   #create payload object (dictionaty)
@@ -145,26 +210,21 @@ def getBearerToken(username, service, scope, client):
   #audience field, should be service name - value copied from service parameter
   payload["aud"] = service
 
+  print "==> JWT SERVICE: " + service
+
   #expiration field, set to current time (posix) + AUTHORIZATION_PERIOD
-  d = datetime.datetime.utcnow()
-  unixtime = calendar.timegm(d.utctimetuple())
-  expiration_unixtime = unixtime + os.getenv("AUTHORIZATION_PERIOD", AUTHORIZATION_PERIOD_DEFAULT)
+  unix_time_now = getCurrentUnixTime() 
+  expiration_unixtime = unix_time_now + os.getenv("AUTHORIZATION_PERIOD", AUTHORIZATION_PERIOD_DEFAULT)
   payload["exp"] = expiration_unixtime
 
   #not before time field, set to current unix time
-  payload["nbf"] = unixtime
+  payload["nbf"] = unix_time_now
 
   #issued at time field, the same as nbf field
-  payload["iat"] = unixtime
+  payload["iat"] = unix_time_now 
 
   #token id field 
-  rnd_seed = calendar.timegm(datetime.datetime.utcnow().utctimetuple()) 
-  random.seed(rnd_seed)
-  jti_digest_material = str(random.randint(0, rnd_seed)) + str(service) + str(client)
-  digest = hashes.Hash(hashes.SHA256(), backend=default_backend())
-  digest.update(bytes(jti_digest_material))
-  jti_digest = digest.finalize()  
-  payload["jti"] = base64.b64encode(jti_digest)
+  payload["jti"] = getRandomToken(username, service, client) 
  
 
   #permission struct (only one permission per request assumed)
@@ -211,6 +271,11 @@ def getBearerToken(username, service, scope, client):
   #create JWT 
   token = jwt.encode(payload, private_key, algorithm="RS256", headers=headerItems) 
 
+  #check for validity by verifiying the signature
+  #t2 = jwt.decode(token, public_key, audience=service, algorithm="RS256")
+
+  #print "JWT decoded: " + str(t2)
+ 
   #TODO remove
   print "==>PAYLOAD: " + json.dumps(payload)
 
@@ -304,7 +369,7 @@ def notification_sink():
   try:
     if access_authType != ANONYMOUS_AUTHORIZATION_TYPE:
       if access_userCredentials[0] != getRequestArgument(request, "account"):
-        log(LOG_DEBUG, "Basic authorization user does not match account parameter; Basic header="+ access_userCredentials[0] + ", account=" + getRequestArgument(request, "account"))
+        log(LOG_DEBUG, "Basic authorization user does not match account parameter; Basic header="+ str(access_userCredentials[0]) + ", account=" + str(getRequestArgument(request, "account")))
         return response, 401
   except KeyError:
     log(LOG_DEBUG, "No account parameter specified in the request") 
@@ -331,11 +396,35 @@ def notification_sink():
   except KeyError: 
     pass
 
-  #add bearer token
+
+  #if "grant_type" argument is specified with the value "refresh_token", check for refresh token in the
+  #refresh token registry
+  ref_token_user = None
+  try:
+    if getRequestArgument(request, "grant_type") == "refresh_token":
+      try:
+        ref_token = getRequestArgument(request, "refresh_token") 
+        ref_token_user = getUserFromRefreshToken(ref_token, checkTokenValidity=False) 
+        if checkRefreshToken(ref_token, service=getRequestArgument(request, "service")) == False:
+          log(LOG_DEBUG, "Refresh token not valid for user " + str(ref_token_user) )
+          return response, 401
+      except KeyError:
+        log(LOG_DEBUG, "Refresh token not found in the refresh token registy")
+        return response, 401 
+
+  except KeyError:  #no grant_type found
+    pass
+
+  #try to find out user's name 
   client = access_userCredentials[0]   #TODO: check if this is true in all cases (anonymous access should pass "")
   if client == ANONYMOUS_USER_NAME:
     client = ""
+  if ref_token_user != None:
+    client = ref_token_user
+  
+  #print "\n==>DETECTED USER: " + client + "\n"
 
+  #add bearer token
   resp_content["token"] = getBearerToken(access_userCredentials[0], service, scope, client) 
  
 
