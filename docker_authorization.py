@@ -7,12 +7,15 @@ import base64
 import datetime
 import calendar
 import random
+import re
+
 
 from cryptography.x509 import load_pem_x509_certificate
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives import hashes
 
+from passlib.apache import HtpasswdFile
 import jwt
 
 
@@ -23,7 +26,14 @@ import jwt
 #
 
 AUTHORIZATION_ISSUER_DEFAULT = "dockertest.fairuse.org"
+#AUTHORIZATION_ISSUER_DEFAULT = "dockertest.fairuse.orgic"
 AUTHORIZATION_PERIOD_DEFAULT = 300
+
+GK_SECURITY_CERT_PATH_DEFAULT = "/var/dauth/auth/cert.crt"
+GK_SECURITY_PKEY_PATH_DEFAULT = "/var/dauth/auth/pkey.key"
+
+AUTHENTICATION_HTPASSWD_PATH_DEFAULT = "/var/dauth/auth/htpasswd"
+AUTHORIZATION_ACL_PATH_DEFAULT = "/var/dauth/auth/acl.json" 
 
 REFRESH_TOKEN_VALIDITY_PERIOD = 3600
 
@@ -33,36 +43,6 @@ ANONYMOUS_AUTHORIZATION_TYPE = "NoAuthType"
 ANONYMOUS_USER_CREDENTIALS = "QW5vbnltb3VzOg==" #base64 encodeed "Anonymous:"
 ANONYMOUS_USER_NAME = "Anonymous"
 ANONYMOUS_USER_PASSWORD = ""
-
-#
-#Log levels
-#
-LOG_DEBUG = "DEBUG" 
-LOG_WARNING = "WARNING" 
-LOG_INFO = "INFO" 
-
-#
-#
-# Refresh token registry
-#
-#
-refresh_token_registry = dict()
-
-
-#load security data
-f = open("/home/icavrak/docker/certs/fairuse.crt", "rb")
-cert_data = f.read()
-f.close()
-f = open("/home/icavrak/docker/certs/fairuse.key", "rb")
-private_key_data = f.read()
-f.close()
-
-#create security objects (extract keys...)
-cert_obj = load_pem_x509_certificate(cert_data, default_backend())
-public_key = cert_obj.public_key()
-private_key = serialization.load_pem_private_key(private_key_data, password=None, backend=default_backend()) 
-
-
 
 #
 #
@@ -81,6 +61,95 @@ def log(loglevel, message):
 
    #output log record TODO: log target?
    print logstring
+
+
+#
+#Log levels
+#
+LOG_DEBUG = "DEBUG" 
+LOG_WARNING = "WARNING" 
+LOG_INFO = "INFO" 
+
+#
+#
+# Refresh token registry
+#
+#
+refresh_token_registry = dict()
+
+#
+#
+# Authorization realms
+#
+#
+
+#get filename for htpasswd-based authentication 
+auth_htpasswd_path = os.getenv("GK_AUTHENTICATION_HTPASSWD_PATH", AUTHENTICATION_HTPASSWD_PATH_DEFAULT)
+
+#load htpasswd file
+auth_htpasswd = None
+auth_htpasswd_users = list()
+
+try: 
+  auth_htpasswd = HtpasswdFile(auth_htpasswd_path)
+ 
+  #create htpasswd user list
+  auth_htpasswd_users = auth_htpasswd.users()
+  log(LOG_INFO, "Loaded user authentication data from " + auth_htpasswd_path)
+except IOError:
+  log(LOG_WARNING, "Failed to load user authentication data from " + auth_htpasswd_path)
+
+
+
+#
+#
+# Access Control List 
+#
+#
+auth_acl_path = os.getenv("GK_AUTHORIZATION_ACL_PATH", AUTHORIZATION_ACL_PATH_DEFAULT)
+
+#load acl file
+acl_data = None
+
+try:
+  with open(auth_acl_path) as acl_file:
+    acl_data = json.load(acl_file)
+  log(LOG_INFO, "Loaded ACL data from " + auth_acl_path)
+except:
+  log(LOG_WARNING, "Failed to load ACL data from " + auth_acl_path)
+
+#
+#
+# Security data (SSL) 
+#
+#
+try:
+  #load security data
+  sec_cert_path = os.getenv("GK_SECURITY_CERT_PATH", GK_SECURITY_CERT_PATH_DEFAULT)
+  f = open(sec_cert_path, "rb")
+  cert_data = f.read()
+  f.close()
+  log(LOG_INFO, "Loaded certificate data from " + sec_cert_path)
+except IOError:
+  log(LOG_WARNING, "Failed to load SSH security data from " + sec_cert_path)
+
+try:
+  sec_pkey_path = os.getenv("GK_SECURITY_PKEY_PATH", GK_SECURITY_PKEY_PATH_DEFAULT)
+  f = open(sec_pkey_path, "rb")
+  private_key_data = f.read()
+  f.close()
+  log(LOG_INFO, "Loaded private key data from " + sec_pkey_path)
+except IOError:
+  log(LOG_WARNING, "Failed to load SSH security data from " + sec_pkey_path)
+  
+#create security objects (extract keys...)
+try:
+  cert_obj = load_pem_x509_certificate(cert_data, default_backend())
+  public_key = cert_obj.public_key()
+  private_key = serialization.load_pem_private_key(private_key_data, password=None, backend=default_backend()) 
+  log(LOG_INFO, "Loaded SSH security data from " + auth_htpasswd_path)
+except Error:
+  log(LOG_WARNING, "Failed to initialize SSH security data")
 
 #
 # Utility functions
@@ -114,19 +183,30 @@ def getRandomToken(username, service, client):
  
 # Authentication and authorization
 #
-#
-
 def authenticateUser(username, password):
 
   #Authenticate user Anonymous
   if username == ANONYMOUS_USER_NAME and password == ANONYMOUS_USER_PASSWORD:
+    log(LOG_DEBUG, "Authenticated anonymous user ") 
     return True
+
+  #check for users in htpasswd file
+  if auth_htpasswd != None:
+
+    if username in auth_htpasswd.users():
+      if auth_htpasswd.check_password(username, password) == True:
+        log(LOG_DEBUG, "Authenticated user " + username + " using htpasswd authentication source")
+        return True
+      else:
+        return False
+
 
   #TODO authenticate from interna/external user list 
   #htpassword file, LDAP, AD, ...
-  if username=="iki" and password=="iki":
-    return True
 
+
+
+  #default response
   return False
 
 
@@ -182,17 +262,205 @@ def getUserFromRefreshToken(refreshToken, service=None, checkTokenValidity=True)
     return ref_token_data[0]
   except KeyError:
     return None
-   
+  
+
+ 
+def getAllowedActionsForUser(username, resource_name, service, resourceTypeACL):
+
+  #check for resource name and access rights for particular username
+  resourceACL = None
+  userACL = None
+  try:
+    #try to find ACL for the particular resource (verbatim)
+    resourceACL = resourceTypeACL[resource_name]
+    #print "==>RESOURCE ACL: " + str(resourceACL)
+
+    #try to find username in the ACL (verbatim)
+    try:
+      userACL = resourceACL[username]
+      #print "==>USER ACL: " + str(userACL)
+
+    except KeyError:
+      log(LOG_INFO, "Could not find ACL data for user " + username + " for resource " + resource_name)
+  except KeyError:
+    log(LOG_INFO, "Could not find ACL data for resource " + resource_name + " for service: " + service)
+
+  return userACL
+
+
+
+
+def getAllowedActionsForUserExt(username, userGroups, resource_name, service, resourceTypeACL):
+
+  #user access rights
+  userACL = None 
+
+  #TODO izbrisati
+  #return userACL
+
+  #get the list of the resources for the given resource type and service
+  resourceList = resourceTypeACL.keys()
+
+  #iterate over the list of resource names
+  for resource in resourceList:
+
+    #expand the variables in the resource name, if exist:
+    #resource type - <RESOURCE_TYPE>
+    #resourceName = resource.replace("<RESOURCE_TYPE>", resource_type)
+
+    #user name - <USERNAME>
+    #resourceName = resourceName.replace("<USERNAME>", username)
+    resourceName = resource.replace("<USERNAME>", username)
+
+    print "==> resource " + resource + " -> " + resourceName + "; matching to " + resource_name
+
+    #construct a regex from the expanded resource name
+    res = re.search(resourceName, resource_name)
+
+    #check if match is found, if not move to next resource 
+    try:
+      if res == None:
+        print "==>  * - no match"
+        continue
+
+      print "==>  " + str(res)
+      if res.group(0) != resource_name:
+        print "==>  " + res.group(0) + " - no match"
+        continue
+
+      #match is found, check for generic username <USERNAME> in the user list
+      resourceACL = resourceTypeACL[resource]
+      print "==>  matched resource"
+      try:
+        #generic username found, stop iteration
+        userACL = resourceACL["<USERNAME>"]
+        print "==>    match user <USERNAME>"
+        break
+
+      #no generic username found
+      except KeyError:
+        pass
+
+      #try to find current username
+      try:
+        #real username found in the ACL, stop iteration
+        userACL = resourceACL[username]
+        print "==>    match user " + username
+        break
+
+      #no current username found in the resource ACL
+      except KeyError:
+        pass
+
+      #if no user groups are defined, move to next resource
+      if userGroups != None:
+
+        #iterate over user list, try to detect group names
+        userList = resourceACL.keys()
+        for user in userList:
+
+          print "==>    matching user groups..."
+
+          #is user actually a user list - "(groupname)"?
+          if user.startswith("(") and user.endswith(")"):
+
+            #extract group name (strip braces)
+            user = user[1:len(user)-1]
+
+            print "==>      checking group " + user
+            #try to find the group name in groups list for the current service
+            try:
+              group = userGroups[user]
+
+              print "==>      group found in service group list"
+
+              #is the username within the list of user names for the current group?
+              if username in group:
+		print "==>             " + str(username) + "  " + str(resourceACL)
+                userACL = resourceACL["("+user+")"]
+                print "==>      user " + username + " found in group " + user
+                break
+              else:
+                print "==>      user " + username + " not found in group " + user	
+            #user group definition not find for the current service
+            except KeyError:
+              print "==>      group not found in service group list"
+              continue
+
+    except IndexError:
+    #no regex match, continue with iterating over resources
+      print "==>  * - no match"
+      continue
+
+  return userACL
+
+
+
+
+
+
+
 
 def getAllowedActions(username, service, scope):
 
-  #default allowed action list is empty
-  if scope != None:
-    allowedActions = ["pull", "push"]
-  else: 
-    allowedActions = []
+  #default actions - empty set
+  allowedActions = []
+
+  #check that ACL is loaded
+  if acl_data == None:
+    log(LOG_DEBUG, "No ACL data loaded, cannot perform authorization service")
+    return allowedActions 
+
+  #extract all information from scope argument, check for valid format
+  #type:name:actions
+  try:
+    resource_type, resource_name, resource_actions = scope.split(":")
+  except ValueError:
+    log(LOG_DEBUG, "Malformed scope information: " + str(scope))
+    return allowedActions
+
+  try:
+    #get service-specific sub-ACL
+    serviceACL = acl_data[service]
+    try:
+      #get resource type-specific sub-ACL 
+      resourceTypeACL = serviceACL[resource_type]
+    except KeyError:
+      log(LOG_INFO, "Could not find resource type: " + resource_type + " ACL data for service: " + service)
+      return allowedActions
+  except KeyError:
+    log(LOG_INFO, "Could not find ACL data for service: " + service)
+    return allowedActions
+
+  #get access rights for particular username
+  userACL = getAllowedActionsForUser(username, resource_name, service, resourceTypeACL) 
+
+  if userACL == None:
+    log(LOG_DEBUG, "Static ACL information on user " + username + " not found, trying advanced one. ")
+
+  #if userACL was not found in the "verbatim" interpretation of the ACL list,
+  #for the requested service and resource type, try with the regex+varables interpretation 
+  #and user groups, if defined for the authorization requesting service
+  if userACL == None:
+    userGroups = None
+    try:
+      userGroups = serviceACL["groups"]
+    except KeyError:
+      #no user groups defined for the service
+      log(LOG_DEBUG, "No user groups defined for service " + service)
+      pass
+
+    userACL = getAllowedActionsForUserExt(username, userGroups, resource_name, service, resourceTypeACL)
+
+  #determine granted access rights
+  if userACL != None: 
+    s1 = set(userACL)
+    s2 = set(resource_actions.split(","))
+    allowedActions = list(s1.intersection(s2))
 
   return allowedActions
+
+
 
 def getBearerToken(username, service, scope, client):
   
@@ -202,7 +470,7 @@ def getBearerToken(username, service, scope, client):
   payload = {}
 
   #issuer field, as in AUTHORIZATION_ISSUER environment variable 
-  payload["iss"] = os.getenv("AUTHORIZATION_ISSUER", AUTHORIZATION_ISSUER_DEFAULT)
+  payload["iss"] = os.getenv("GK_AUTHORIZATION_ISSUER", AUTHORIZATION_ISSUER_DEFAULT)
 
   #authorization subject field, value of client parameter is copied
   payload["sub"] = client
@@ -214,7 +482,7 @@ def getBearerToken(username, service, scope, client):
 
   #expiration field, set to current time (posix) + AUTHORIZATION_PERIOD
   unix_time_now = getCurrentUnixTime() 
-  expiration_unixtime = unix_time_now + os.getenv("AUTHORIZATION_PERIOD", AUTHORIZATION_PERIOD_DEFAULT)
+  expiration_unixtime = unix_time_now + os.getenv("GK_AUTHORIZATION_PERIOD", AUTHORIZATION_PERIOD_DEFAULT)
   payload["exp"] = expiration_unixtime
 
   #not before time field, set to current unix time
@@ -289,6 +557,7 @@ def getIssuedTime():
   d = datetime.datetime.utcnow()
   return d.isoformat('T') + "Z"
 
+
 #
 #
 # Access points
@@ -302,11 +571,15 @@ app = Flask(__name__)
 @app.route("/docker/token", methods=["GET", "POST", "PUT"])
 def notification_sink():
 
+  #reload htpasswd data, if changed
+  if auth_htpasswd != None:
+    auth_htpasswd.load_if_changed()
+
   #create a response object
   response = make_response("")
 
   #print request and header information
-  print "\n\n-------------------------------------------------"
+  print "\n\n--correct version -----------------------------------------------"
   print "==> Headers: " + str(request.headers)
   print "==> Request method: {0:s}".format(request.method) 
   print "==> Form content: " + str(request.form)
@@ -392,7 +665,8 @@ def notification_sink():
   #if requested, add refresh token
   try:
     if getRequestArgument(request, "offline_token") == "true":
-      resp_content["refresh_token"] = getRefreshToken(access_userCredentials[0], service, scope)
+      #resp_content["refresh_token"] = getRefreshToken(access_userCredentials[0], service, scope)
+      pass
   except KeyError: 
     pass
 
@@ -422,8 +696,9 @@ def notification_sink():
   if ref_token_user != None:
     client = ref_token_user
   
-  #print "\n==>DETECTED USER: " + client + "\n"
-
+  print "\n==>DETECTED USER: " + client + "\n"
+  print "==> SCOPE: " + str(scope) + "\n"
+ 
   #add bearer token
   resp_content["token"] = getBearerToken(access_userCredentials[0], service, scope, client) 
  
@@ -462,7 +737,7 @@ def notification_sink():
     record["client_name"] = event["actor"]["name"]
 
     #read log filename from environment variable
-    LOG_FILENAME = os.getenv("DOCKER_NOTIFICATION_LOG") 
+    LOG_FILENAME = os.getenv("GK_DOCKER_NOTIFICATION_LOG") 
 
     #if no log filename defined, output to stdout
     if LOG_FILENAME!= None:
