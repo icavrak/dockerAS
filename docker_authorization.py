@@ -221,6 +221,27 @@ def notification_sink():
 @app.route("/authenticate", methods=["GET"])
 def authenticate():
 
+  utils.debug("")
+
   #create a response object
   response = make_response("")
-  
+ 
+  #dump request data (if in debug mode)
+  utils.dumpRequestData(request, preamble="token request")
+
+  #extract authentication data from request
+  access_authType, access_userCredentials = auth.getRequestAuthenticationData(request)
+  if access_authType == None:
+    return response, 401
+
+  #extract username and password from provided basic credentials
+  username, password = auth.getAccessCredentialsData(access_authType, access_userCredentials)
+  if username == None:
+    return response, 401
+
+  #check for username:password validity
+  if auth.authenticateUser(username, password) == False:
+    log.log(log.LOG_WARNING, "User authorization failed for user " + access_userCredentials[0])
+    return response, 401
+
+  return response
