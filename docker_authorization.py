@@ -26,13 +26,14 @@ import jwt
 #
 
 AUTHORIZATION_ISSUER_DEFAULT = "dockertest.fairuse.org"
-#AUTHORIZATION_ISSUER_DEFAULT = "dockertest.fairuse.orgic"
 AUTHORIZATION_PERIOD_DEFAULT = 300
 
 GK_SECURITY_CERT_PATH_DEFAULT = "/var/dauth/auth/cert.crt"
 GK_SECURITY_PKEY_PATH_DEFAULT = "/var/dauth/auth/pkey.key"
 
 AUTHENTICATION_HTPASSWD_PATH_DEFAULT = "/var/dauth/auth/htpasswd"
+AUTHENTICATION_EXTERNAL_URL=""
+
 AUTHORIZATION_ACL_PATH_DEFAULT = "/var/dauth/auth/acl.json" 
 
 REFRESH_TOKEN_VALIDITY_PERIOD = 3600
@@ -43,6 +44,16 @@ ANONYMOUS_AUTHORIZATION_TYPE = "NoAuthType"
 ANONYMOUS_USER_CREDENTIALS = "QW5vbnltb3VzOg==" #base64 encodeed "Anonymous:"
 ANONYMOUS_USER_NAME = "Anonymous"
 ANONYMOUS_USER_PASSWORD = ""
+
+#SYMBOLS USED IN ACL
+
+#<USERNAME> is replaced by currently logged in user, or "Anonymous" if no user is logged in
+#<REGUSER> currenly logged in user, if no user is logged it is NOT replaced 
+ACL_ANY_FILENAME = "$"
+ACL_ANY_PATH = "*"
+ACL_ANY_FILENAME_REGEX = "[A-Za-z0-9_]+"
+ACL_ANY_PATH_REGEX = "((?:[A-Za-z0-9_]*)(?:\/[A-Za-z0-9_]+)*)"
+
 
 #
 #
@@ -183,7 +194,7 @@ def getRandomToken(username, service, client):
  
 # Authentication and authorization
 #
-def authenticateUser(username, password):
+def authenticateUser_HTPASSWD(username, password):
 
   #Authenticate user Anonymous
   if username == ANONYMOUS_USER_NAME and password == ANONYMOUS_USER_PASSWORD:
@@ -200,14 +211,32 @@ def authenticateUser(username, password):
       else:
         return False
 
-
-  #TODO authenticate from interna/external user list 
-  #htpassword file, LDAP, AD, ...
-
-
-
   #default response
   return False
+
+
+
+def authenticateUser_EXTERNAL(username, password):
+
+  
+
+
+
+def authenticateUser(username, password):
+
+  #first try to authenticate user using local htpasswd
+  if authenticateUser_HTPASSWD(username, password) == True:
+    return True
+
+  #if external service URL is defined, try using it
+  if authenticateUser_EXTERNAL(username, password) == True:
+    return True
+
+  #if LDAP/AD data is defined, try using it
+  #TODO
+
+  return False
+
 
 
 def getRefreshToken(username, service, scope):
@@ -311,6 +340,12 @@ def getAllowedActionsForUserExt(username, userGroups, resource_name, service, re
     #user name - <USERNAME>
     #resourceName = resourceName.replace("<USERNAME>", username)
     resourceName = resource.replace("<USERNAME>", username)
+    if username != "Anonymous":
+      resourceName = resource.replace("<REGUSER>", username)
+
+    #replace special symbols in the registry name with regex snippets
+    resourceName = resource.replace(ACL_ANY_FILENAME, ACL_ANY_FILENAME_REGEX)
+    resourceName = resource.replace(ACL_ANY_PATH, ACL_ANY_PATH_REGEX)
 
     print "==> resource " + resource + " -> " + resourceName + "; matching to " + resource_name
 
@@ -335,6 +370,16 @@ def getAllowedActionsForUserExt(username, userGroups, resource_name, service, re
         #generic username found, stop iteration
         userACL = resourceACL["<USERNAME>"]
         print "==>    match user <USERNAME>"
+        break
+
+      #no generic username found
+      except KeyError:
+        pass
+
+      try:
+        #generic username found, stop iteration
+        userACL = resourceACL["<REGUSER>"]
+        print "==>    match user <REGUSER>"
         break
 
       #no generic username found
