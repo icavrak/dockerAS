@@ -1,0 +1,10 @@
+export FLASK_APP=docker_authorization.py
+export FLASK_DEBUG=1
+
+
+export GK_SECURITY_CERT_PATH=/home/icavrak/docker/certs/fairuse.crt
+export GK_SECURITY_PKEY_PATH=/home/icavrak/docker/certs/fairuse.key
+
+export GK_AUTHENTICATION_HTPASSWD_PATH=/home/icavrak/python/dockerAS/htpasswd
+export GK_AUTHORIZATION_ACL_PATH=/home/icavrak/python/dockerAS/acl.json
+

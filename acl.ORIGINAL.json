@@ -1,0 +1,34 @@
+{
+	"registry.docker.io" : {
+		"groups" : {
+			"or_admin" : ["iki"],
+			"or_students" : ["pero", "jozo", "ante", "mate"],
+			"or_lab1" : ["pero", "jozo", "ante", "mate"],
+			"or_lab2a" : ["pero", "jozo"],
+			"or_lab2b" : ["ante", "mate"]
+		},
+		"repository" : {
+			"public/*" : {
+				"<USERNAME>" : ["push", "pull"]
+			},
+			"or/lab/images/$" : {
+				"(or_admin)" : ["push", "pull"]
+			},
+			"or/lab/images/lab1" : {
+				"(or_students)" : ["pull"]
+			},
+			"or/lab/images/lab2a" : {
+				"(or_lab2a)" :["pull"]	
+			},
+			"or/lab/images/lab2b" : {
+				"(or_lab2b)" :["pull"]	
+			},
+			"or/lab/<USERNAME>/lab1" : {
+				"(or_students)" : ["push", "pull"]  
+			},
+			"or/lab/<USERNAME>/lab2" : {
+				"(or_students)" :  ["push", "pull"]
+			}
+		}
+	}
+}

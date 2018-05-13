@@ -75,6 +75,28 @@ def getRequestArgument(request, argumentName):
 def getRequestHeader(request, headerName):
     return request.headers[headerName]
 
+def validateUser(request, restrictLocal=False, allowAnonymous=True):
+
+  #extract authentication data from request
+  access_authType, access_userCredentials = auth.getRequestAuthenticationData(request)
+  if access_authType == None:
+    return False 
+
+  #extract username and password from provided basic credentials
+  username, password = auth.getAccessCredentialsData(access_authType, access_userCredentials)
+  if username == None:
+    return False 
+
+  #check for username:password validity
+  if auth.authenticateUser(username, password, restrictLocal, allowAnonymous) == False:
+    log.log(log.LOG_WARNING, "User authorization failed for user " + username)
+    return False
+
+  return True 
+
+
+
+
 
 #
 #
@@ -221,29 +243,69 @@ def authenticate():
   response = make_response("")
  
   #dump request data (if in debug mode)
-  utils.dumpRequestData(request, preamble="token request")
+  utils.dumpRequestData(request, preamble="Authentication request")
 
-  #extract authentication data from request
-  access_authType, access_userCredentials = auth.getRequestAuthenticationData(request)
-  if access_authType == None:
-    return response, 401
-
-  #extract username and password from provided basic credentials
-  username, password = auth.getAccessCredentialsData(access_authType, access_userCredentials)
-  if username == None:
-    return response, 401
-
-  #check for username:password validity
-  if auth.authenticateUser(username, password) == False:
-    log.log(log.LOG_WARNING, "User authorization failed for user " + access_userCredentials[0])
+  #validate user
+  if validateUser(request) == False:
     return response, 401
 
   return response
 
 
+@app.route("/acl", methods=["GET"])
+def getACL():
+
+  #create a response object
+  response = make_response("")
+
+  #dump request data (if in debug mode)
+  utils.dumpRequestData(request, preamble="ACL get")
+
+  #validate user
+  if validateUser(request) == False:
+    return response, 401
+
+  #return acl in json form
+  response.mimetype = "application/json"
+  response.set_data(auth.getJSONACLData())
+
+  return response, 200
+
+
+@app.route("/acl", methods=["PUT"])
+def putACL():
+
+  #create a response object
+  response = make_response("")
+
+  #dump request data (if in debug mode)
+  utils.dumpRequestData(request, preamble="ACL put")
+
+  #validate user
+  if validateUser(request) == False:
+    return response, 401
+
+  #get new ACL list
+  print "==> " + str(request.data)
+  json_content = request.get_json(silent=True)
+  if json_content == None:
+    print "==> JSON CONTENT ERROR" 
+    return response, 400
+
+  #if auth.putJSONACLData(json_content) == False:
+  if auth.putJSONACLData(request.data) == False:
+    print "==> JSON ACL ERROR"
+    return response, 400
+
+  return response, 200
+
+
+
+
 @app.route("/auth2", methods=["GET"])
 def auth2():
 
+  #TODO test - remove later
   #create a response object
   response = make_response("")
 

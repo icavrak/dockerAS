@@ -16,6 +16,7 @@ import json
 import base64
 import re
 import requests
+import os
 
 #
 #
@@ -44,6 +45,7 @@ auth_htpasswd_users 	= list()
 auth_ext_url		= None
 
 acl_data     		= None
+acl_file_path		= None
 
 sec_cert	= None
 sec_public_key  = None
@@ -128,14 +130,75 @@ def setExternalServiceURL(url):
 
 def loadACLData(path):
 
-  global acl_data
+  global acl_data, acl_file_path
   try:
     with open(path) as acl_file:
       acl_data = json.load(acl_file)
     log.log(log.LOG_INFO, "Loaded ACL data from " + path)
+    acl_file_path = path
     return True
   except IOError:
+    log.log(log.LOG_WARNING, "Falied to load ACL data from " + path)
     return False
+
+def getJSONACLData():
+  return json.dumps(acl_data)
+
+def putJSONACLData(json_acl):
+
+  global acl_data
+
+  #check well-formedness of externally provided JSON ACL
+  try:
+    new_acl = json.loads(json_acl)
+    log.log(log.LOG_DEBUG, "Parsed ACL data from external source")
+  except Exception:
+    log.log(log.LOG_WARNING, "Failed to parse ACL data from external source")
+    return False
+
+  #rename ACL file to temporary filename (if path is defined)
+  print "==> ACL FILEPATH " + acl_file_path
+
+  if acl_file_path != None:
+    success = False
+    try:
+      os.rename(acl_file_path,  acl_file_path + "~")
+      #save the new content to the orginal ACL file
+      try:
+        with open(acl_file_path, 'w') as outfile:
+          json.dump(new_acl, outfile, sort_keys=True, indent=2, separators=(",", ": "))
+        success = True
+        log.log(log.LOG_INFO, "Saved new ACL data to " + acl_file_path)
+      except IOError:
+        log.log(log.LOG_WARNING, "Failed to save new ACL file " + acl_file_path)
+    except IOError:
+      log.log(log.LOG_WARNING, "Failed to rename existing ACL file " + acl_file_path)
+    
+    #if ACL file switch was completed... 
+    if success == True:
+      #rename temp filename to old version filename
+      try:
+        os.rename(acl_file_path + "~",  acl_file_path + ".OLD")
+      except IOError:
+        log.log(log.LOG_WARNING, "Failed to rename temporary ACL file to old version: " + acl_file_path + "~")
+
+      #switch ACL lists in memory
+      acl_data = new_acl
+      return True
+
+    #ACL file switch was not successful, revert changes
+    else:
+      try:
+        os.remove(acl_file_path)
+      except:
+        log.log(log.LOG_WARNING, "Failed to remove original ACL file: " + acl_file_path)
+      try:
+        os.rename(acl_file_path + "~",  acl_file_path)
+      except IOError:
+        log.log(log.LOG_WARNING, "Failed to restore original ACL file: " + acl_file_path)
+
+  return False
+
 
 
 def loadCertData(path):
@@ -249,15 +312,19 @@ def getAccessCredentialsData(auth_type, raw_credentials):
 #                   A U T H E N T I C A T I O N
 # 
 ###########################################################################
-def authenticateUser_HTPASSWD(username, password):
+def authenticateUser_HTPASSWD(username, password, allowAnonymous=True):
 
   global auth_htpasswd
 
   log.log(log.LOG_DEBUG, "Autenticating user " + username + " using HTPASSWD method")
   #Authenticate user Anonymous
   if username == ANONYMOUS_USER_NAME and password == ANONYMOUS_USER_PASSWORD:
-    log.log(log.LOG_DEBUG, "Authenticated anonymous user ")
-    return True
+    if allowAnonymous == True:
+      log.log(log.LOG_DEBUG, "Authenticated anonymous user ")
+      return True
+    else:
+      log.log(log.LOG_DEBUG, "Not allowed to authenticate user Anonymous")
+      return False
 
   #check that the htpasswd file has been loaded
   if auth_htpasswd == None:
@@ -343,15 +410,15 @@ def authenticateUser_EXTERNAL(username, password):
   return False
 
 
-def authenticateUser(username, password):
+def authenticateUser(username, password, restrictLocal=False, allowAnonymous=True):
 
 
   #first try to authenticate user using local htpasswd
-  if authenticateUser_HTPASSWD(username, password) == True:
+  if authenticateUser_HTPASSWD(username, password, allowAnonymous) == True:
     return True
 
   #if external service URL is defined, try using it
-  if authenticateUser_EXTERNAL(username, password) == True:
+  if restrictLocal == False and authenticateUser_EXTERNAL(username, password) == True:
     return True
 
   #if LDAP/AD data is defined, try using it
