@@ -6,10 +6,6 @@ import requests
 
 import json
 import os 
-#import base64
-#import datetime
-#import calendar
-#import random
 
 #
 #application-specific modules
@@ -49,7 +45,7 @@ auth_htpasswd_path = os.getenv("GK_AUTHENTICATION_HTPASSWD_PATH", AUTHENTICATION
 auth.loadHTPASSWDData(auth_htpasswd_path)
 
 #set the URL of the external authentication service, if defined
-auth_ext_url = os.getenv("AUTHENTICATION_EXTERNAL_URL", AUTHENTICATION_EXTERNAL_URL_DEFAULT)
+auth_ext_url = os.getenv("GK_AUTHENTICATION_EXTERNAL_URL", AUTHENTICATION_EXTERNAL_URL_DEFAULT)
 auth.setExternalServiceURL(auth_ext_url)
 
 
@@ -142,7 +138,7 @@ def notification_sink():
 
   #check for username:password validity
   if auth.authenticateUser(username, password) == False:
-    log.log(log.LOG_WARNING, "User authorization failed for user " + access_userCredentials[0]) 
+    log.log(log.LOG_WARNING, "User authorization failed for user " + username) 
     return response, 401
   
 
@@ -158,7 +154,7 @@ def notification_sink():
   resp_content = {}
 
   #add expires_in data
-  resp_content["expires_in"] = tokens.getTokenExpiration(access_userCredentials[0], service, scope)
+  resp_content["expires_in"] = tokens.getTokenExpiration(username, service, scope)
 
   #add issued_at data
   resp_content["issued_at"] = tokens.getIssuedTime()
@@ -221,8 +217,6 @@ def notification_sink():
 @app.route("/authenticate", methods=["GET"])
 def authenticate():
 
-  utils.debug("")
-
   #create a response object
   response = make_response("")
  
@@ -245,3 +239,16 @@ def authenticate():
     return response, 401
 
   return response
+
+
+@app.route("/auth2", methods=["GET"])
+def auth2():
+
+  #create a response object
+  response = make_response("")
+
+  r = requests.get("http://dockertest.fairuse.org:5001/authenticate", auth=('iki', 'iki'))
+
+  print r.content
+
+  return r.content

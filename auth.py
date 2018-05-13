@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives import hashes
 import json
 import base64
 import re
+import requests
 
 #
 #
@@ -31,6 +32,8 @@ ACL_ANY_FILENAME_REGEX 	= "[A-Za-z0-9_]+"
 ACL_ANY_PATH		= "*"
 ACL_ANY_PATH_REGEX	= "((?:[A-Za-z0-9_]*)(?:\/[A-Za-z0-9_]+)*)"
 
+AUTH_EXT_CAHCE_TIMEOUT  = 30 
+
 #
 #
 # V A R I A B L E S
@@ -45,6 +48,8 @@ acl_data     		= None
 sec_cert	= None
 sec_public_key  = None
 sec_private_key = None
+
+auth_ext_cache	= dict()
 
 ###########################################################################
 #
@@ -93,7 +98,7 @@ def getKID():
 
 ###########################################################################
 #
-#                        L O A D I N G    A U T H.  D A T A 
+#               L O A D I N G    A U T H.  D A T A 
 # 
 ###########################################################################
 
@@ -178,7 +183,7 @@ def extractSecObjects(cert_data, pkey_data):
 
 ###########################################################################
 #
-#                  H T T P   H E A D E R   D A T A 
+#              H T T P   H E A D E R   D A T A 
 # 
 ###########################################################################
 
@@ -241,7 +246,7 @@ def getAccessCredentialsData(auth_type, raw_credentials):
 
 ###########################################################################
 #
-#                         A U T H E N T I C A T I O N
+#                   A U T H E N T I C A T I O N
 # 
 ###########################################################################
 def authenticateUser_HTPASSWD(username, password):
@@ -279,25 +284,60 @@ def authenticateUser_HTPASSWD(username, password):
 
 def authenticateUser_EXTERNAL(username, password):
 
-  log.log(log.LOG_DEBUG, "Autenticating user " + username + " using external method")
 
   #check if external service's URL is defined, otherwise skip
   if auth_ext_url == None:
     return False
 
+  log.log(log.LOG_DEBUG, "Autenticating user " + username + " using external method")
+
+
+  #check if the record exists in the local cache
+  try:
+    #fetch the record (if exists)
+    auth_record = auth_ext_cache[username]
+    
+    #get the password and expiration time data
+    pwd = auth_record[0]
+    exptime = auth_record[1] 
+
+    #check for equalness of passwords
+    if pwd != password:
+      log.log(log.LOG_DEBUG, "Passwords in cache and provided password for user " + username + " do not match")
+    else:
+      #check for expiration time of cache record
+      if( exptime < utils.getCurrentUnixTime() ):
+        log.log(log.LOG_DEBUG, "Cache record for user " + username + " expired")
+      else:
+        #confirm username-password match
+        log.log(log.LOG_DEBUG, "Autenticating user " + username + " succeeded using external method (cache)")
+        return True
+  except KeyError:
+    pass
+
   #make an authentication request
   try:
     resp = requests.get(auth_ext_url, auth=(username, password))
-  except ConnectionError:
-    log.log(log.LOG_WARNING, "External auth service at " + auth_ext_url + " not responding")
+  except Exception as e:
+    log.log(log.LOG_WARNING, "External auth service at " + auth_ext_url + " responded with error: " + str(e))
     return False
 
   #check for response codes
   if resp.status_code == 200:
+    
+    #create cache record
+    auth_record = list()
+    auth_record.append(password)
+    auth_record.append(utils.getCurrentUnixTime() + AUTH_EXT_CAHCE_TIMEOUT)
+    auth_ext_cache[username] = auth_record
+    log.log(log.LOG_DEBUG, "Created external authentication cahce record for user " + username)
+
+    #return success
+    log.log(log.LOG_DEBUG, "Autenticating user " + username + " succeeded using external method")
     return True
 
   else:
-    log.log(log.LOG_WARNING, "External auth service response code: " + resp.status_code + " for user " + username)
+    log.log(log.LOG_WARNING, "External auth service response code: " + str(resp.status_code) + " for user " + username)
 
   #default response 
   return False
