@@ -1,0 +1,21 @@
+Logs
+-----
+- log output to log file
+- log output to syslog
+
+
+ACL
+----
+- one acl file for each service
+- log of acl file changes
+- threadsafe acl list switch
+
+
+AUTHENTICATION
+----
+- LDAP support
+- AD support
+- OAUTH2 support
+
+
+
