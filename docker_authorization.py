@@ -1,8 +1,9 @@
 from flask import Flask
 from flask import request
 from flask import make_response
-import requests
 
+import requests
+import re
 
 import json
 import os 
@@ -23,6 +24,19 @@ log.setLogLevel(log.LOG_DEBUG)
 
 #
 #
+# CONSTANTS 
+#
+#
+SELF_NAME = "dockerAS"
+
+USERNAME = "$"
+USERNAME_REGEX = "[A-Za-z0-9_]+"
+
+
+
+
+#
+#
 # DEFAULT VALUES FOR ENVIRONMENT VARIABLES
 #
 #
@@ -39,6 +53,7 @@ AUTHENTICATION_EXTERNAL_URL_DEFAULT =  ""
 
 AUTHORIZATION_ACL_PATH_DEFAULT = "/var/dauth/auth/acl.json" 
 
+DOCKER_REGISTRY_URI_DEFAULT = "https://127.0.0.1"
 
 #get filename for htpasswd-based authentication 
 auth_htpasswd_path = os.getenv("GK_AUTHENTICATION_HTPASSWD_PATH", AUTHENTICATION_HTPASSWD_PATH_DEFAULT)
@@ -63,6 +78,8 @@ pkey_data = auth.loadPKeyData(sec_pkey_path)
 #create security objects (extract keys...)
 auth.extractSecObjects(cert_data, pkey_data)
 
+#set the URL of the docker registry to retrieve the catalog from
+docker_uri = os.getenv("GK_DOCKER_REGISTRY_URI", DOCKER_REGISTRY_URI_DEFAULT)
 
 #
 # Utility functions
@@ -95,6 +112,26 @@ def validateUser(request, restrictLocal=False, allowAnonymous=True):
   return True 
 
 
+def getImageCreationTime(json_metadata):
+
+  #iterate over v1Compatibility nodes and collect "created" timestamps
+  timestamps = list()
+
+  try:
+    data = json_metadata["history"]
+    for c in data:
+      d = c["v1Compatibility"]
+      dd = re.search("created\":\"([0-9-T:.]+Z)", d)
+      if dd != None:
+        timestamps.append(dd.group(1))
+
+    #sort timestamps 
+    timestamps.sort()
+
+    #return the last element (highest date)
+    return timestamps[-1]
+  except KeyError:
+    return ""
 
 
 
@@ -123,7 +160,7 @@ def notification_sink():
   #
   #
 
-  #extrach authentication data from request
+  #extract authentication data from request
   access_authType, access_userCredentials = auth.getRequestAuthenticationData(request)
   if access_authType == None:
     return response, 401
@@ -141,6 +178,8 @@ def notification_sink():
     scope = getRequestArgument(request, "scope")
   except KeyError:
     pass
+
+  utils.debug("==>SERVICE & SCOPE: " + str(service) + "," + str(scope))
 
   #extract username and password from provided basic credentials
   username, password = auth.getAccessCredentialsData(access_authType, access_userCredentials)
@@ -184,7 +223,7 @@ def notification_sink():
   #if requested, add refresh token
   try:
     if getRequestArgument(request, "offline_token") == "true":
-      #WARNING: docker fails to work if refresh token is present in the response!!!
+      #WARNING: docker fails to work if a refresh token is present in the response!!!
       #resp_content["refresh_token"] = getRefreshToken(access_userCredentials[0], service, scope)
       pass
   except KeyError: 
@@ -299,6 +338,137 @@ def putACL():
 
   return response, 200
 
+
+@app.route("/catalog", methods=["GET"])
+def catalog():
+
+
+  #create a response object
+  response = make_response("")
+
+  #get filter data (if exists)
+  try: 
+    filter = None
+    filter = request.args["filter"]
+    
+    #expand the fiter (if defined) to a usable regex
+    filter = filter.replace(USERNAME, USERNAME_REGEX)
+  except KeyError:
+    pass
+
+  utils.debug("==>CATALOG REQUEST : " + str(filter))
+
+  #extract username and password from provided basic credentials
+  #username, password = auth.getAccessCredentialsData(access_authType, access_userCredentials)
+  #if username == None:
+  #  return response, 401 
+
+  #check for username:password validity
+  #if auth.authenticateUser(username, password) == False:
+  #  log.log(log.LOG_WARNING, "User authorization failed for user " + username) 
+  #  return response, 401
+
+  #issuer field, as in AUTHORIZATION_ISSUER environment variable 
+  auth_issuer = os.getenv("GK_AUTHORIZATION_ISSUER", AUTHORIZATION_ISSUER_DEFAULT)
+
+  #bearer token validity period 
+  auth_period = os.getenv("GK_AUTHORIZATION_PERIOD", AUTHORIZATION_PERIOD_DEFAULT)
+
+  #quick and dirty solution, does not require 2 calls to docker registry
+  service = "registry.docker.io"
+  scope =  "registry:catalog:*"
+
+  #get a JWT authorization (bearer token) from itself
+  bearer = tokens.getBearerToken(SELF_NAME, service, scope, SELF_NAME, auth_issuer, auth_period)
+
+
+  #create a request towards the Docker repository
+  headers = dict()
+  headers = {"Authorization": "Bearer " + bearer}
+
+  #add path for /v2/_catalog
+  docker_catalog_uri = docker_uri + "/v2/_catalog"
+
+  #send the request to docker registry
+  r = requests.get(docker_catalog_uri, headers=headers)
+
+  utils.debug("==>ReGISTRY CATALOG REQUEST STATUS: " + str(docker_catalog_uri) + " :: " + str(r.status_code))
+
+  #if the call has failed, log it and forward the error code to caller
+  if r.status_code != requests.codes.ok:
+    log.log(log.LOG_WARNING, "Fetching Docker registry catalog at " + docker_catalog_uri + " failed with code:" + r.status_code)
+    return response, r.status_code
+
+  utils.debug("==>CATALOG CONTENT: " + r.text)
+
+  #repository set to be returned to the caller
+  repo_list = dict()
+
+  #get the result (returned in JSON format) as an array
+  try:
+    repo_array = r.json()["repositories"]
+    
+    #if it matches a supplied filter, add it to repo_list
+    if filter != None:
+
+      #iterate over each repo array item
+      for repo in repo_array:
+
+        res = re.search(filter, repo)
+        if res == None or res.group(0) != repo:
+          continue
+
+        repo_list[repo] = ""
+
+  except KeyError:
+    #malformed result JSON - no root "repositories" object
+    #return an empty repository list
+    return response
+
+
+  #for each image in the resulting list - get metadata from
+  #the repository
+  for image in repo_list:
+
+    #construct scope parameter (avoiding 1st GET to registry with 401 result)
+    scope="repository:" + image + ":pull"
+
+    #get a JWT authorization (bearer token) from itself
+    bearer = tokens.getBearerToken(SELF_NAME, service, scope, SELF_NAME, auth_issuer, auth_period)
+
+    #create a request towards the Docker repository
+    headers = {"Authorization": "Bearer " + bearer}
+
+    #add path for /v2/...image...
+    tag = "latest"
+    docker_image_metadata_uri = docker_uri + "/v2/" + image + "/manifests/" + tag
+
+    #send a request to docker registry
+    r = requests.get(docker_image_metadata_uri, headers=headers)
+    r_json = r.json()
+
+    #utils.debug("==> METADATA for " + image + ": " + r.text)
+
+    #get the image's timestamp
+    timestamp = getImageCreationTime(r_json)
+
+    #add it as a property
+    t = dict()
+    t["timestamp"] = timestamp
+
+    #add properties to the image record
+    repo_list[image] = t 
+
+  utils.debug("==>ReGISTRY CATALOG REQUEST STATUS: " + str(docker_catalog_uri) + " :: " + str(r.status_code))
+
+
+  #set response content type
+  response.mimetype = "application/json"
+
+  #create resulting json
+  response.data = json.dumps(repo_list) 
+
+  return response
 
 
 

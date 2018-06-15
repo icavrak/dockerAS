@@ -478,7 +478,7 @@ def getAllowedActionsForUserExt(username, userGroups, resource_name, service, re
     resourceName = resourceName.replace(ACL_ANY_FILENAME, ACL_ANY_FILENAME_REGEX)
     resourceName = resourceName.replace(ACL_ANY_PATH, ACL_ANY_PATH_REGEX)
 
-    utils.debug("username= " + username + "; resource=" + resource + "; exp="  + str(resourceName))
+    #utils.debug("username= " + username + "; resource=" + resource + "; exp="  + str(resourceName))
 
     #construct a regex from the expanded resource name
     res = re.search(resourceName, resource_name)
