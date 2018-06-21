@@ -5,6 +5,8 @@ export FLASK_DEBUG=1
 export GK_SECURITY_CERT_PATH=/home/icavrak/docker/certs/fairuse.crt
 export GK_SECURITY_PKEY_PATH=/home/icavrak/docker/certs/fairuse.key
 
+export GK_AUTHENTICATION_EXTERNAL_URI=http://dockertest.fairuse.org:8080/api/authorize
+
 export GK_DOCKER_REGISTRY_URI=https://dockertest.fairuse.org
 
 export GK_AUTHENTICATION_HTPASSWD_PATH=/home/icavrak/python/dockerAS/htpasswd.acltest1

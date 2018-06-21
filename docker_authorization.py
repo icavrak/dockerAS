@@ -9,7 +9,7 @@ import json
 import os 
 
 #
-#application-specific modules
+# application-specific modules
 #
 import log
 import utils
@@ -49,7 +49,7 @@ GK_SECURITY_CERT_PATH_DEFAULT = "/var/dauth/auth/cert.crt"
 GK_SECURITY_PKEY_PATH_DEFAULT = "/var/dauth/auth/pkey.key"
 
 AUTHENTICATION_HTPASSWD_PATH_DEFAULT = "/var/dauth/auth/htpasswd"
-AUTHENTICATION_EXTERNAL_URL_DEFAULT =  ""
+AUTHENTICATION_EXTERNAL_URI_DEFAULT =  ""
 
 AUTHORIZATION_ACL_PATH_DEFAULT = "/var/dauth/auth/acl.json" 
 
@@ -60,8 +60,9 @@ auth_htpasswd_path = os.getenv("GK_AUTHENTICATION_HTPASSWD_PATH", AUTHENTICATION
 auth.loadHTPASSWDData(auth_htpasswd_path)
 
 #set the URL of the external authentication service, if defined
-auth_ext_url = os.getenv("GK_AUTHENTICATION_EXTERNAL_URL", AUTHENTICATION_EXTERNAL_URL_DEFAULT)
-auth.setExternalServiceURL(auth_ext_url)
+print "==> EXTERNAL AUTH URL: " + os.getenv("GK_AUTHENTICATION_EXTERNAL_URI")
+auth_ext_uri = os.getenv("GK_AUTHENTICATION_EXTERNAL_URI", AUTHENTICATION_EXTERNAL_URI_DEFAULT)
+auth.setExternalServiceURL(auth_ext_uri)
 
 
 #load Access Control List 
@@ -150,6 +151,9 @@ def notification_sink():
 
   #create a response object
   response = make_response("")
+
+  #allow CORS
+  response.headers = {'Access-Control-Allow-Origin': '*'}
 
   #dump request data (if in debug mode)
   utils.dumpRequestData(request, preamble="token request")
@@ -281,6 +285,9 @@ def authenticate():
   #create a response object
   response = make_response("")
  
+  #allow CORS
+  response.headers = {'Access-Control-Allow-Origin': '*'}
+
   #dump request data (if in debug mode)
   utils.dumpRequestData(request, preamble="Authentication request")
 
@@ -296,6 +303,9 @@ def getACL():
 
   #create a response object
   response = make_response("")
+
+  #allow CORS
+  response.headers = {'Access-Control-Allow-Origin': '*'}
 
   #dump request data (if in debug mode)
   utils.dumpRequestData(request, preamble="ACL get")
@@ -316,6 +326,9 @@ def putACL():
 
   #create a response object
   response = make_response("")
+
+  #allow CORS
+  response.headers = {'Access-Control-Allow-Origin': '*'}
 
   #dump request data (if in debug mode)
   utils.dumpRequestData(request, preamble="ACL put")
@@ -345,6 +358,9 @@ def catalog():
 
   #create a response object
   response = make_response("")
+
+  #allow CORS
+  response.headers = {'Access-Control-Allow-Origin': '*'}
 
   #get filter data (if exists)
   try: 
@@ -465,6 +481,9 @@ def catalog():
   #set response content type
   response.mimetype = "application/json"
 
+  #allow CORS
+  response.headers = {'Access-Control-Allow-Origin': '*'}
+
   #create resulting json
   response.data = json.dumps(repo_list) 
 
@@ -477,7 +496,11 @@ def auth2():
 
   #TODO test - remove later
   #create a response object
+
   response = make_response("")
+
+  #allow CORS
+  response.headers = {'Access-Control-Allow-Origin': '*'}
 
   r = requests.get("http://dockertest.fairuse.org:5001/authenticate", auth=('iki', 'iki'))
 

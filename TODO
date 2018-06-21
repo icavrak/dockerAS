@@ -13,9 +13,16 @@ ACL
 
 AUTHENTICATION
 ----
+- split authentication according to @<inst> suffix
 - LDAP support
 - AD support
 - OAUTH2 support
 
+
+Dockerization
+-----------
+- list of all env variables
+- dockerized version of DAS
+- compose file docker registry+DAS
 
 

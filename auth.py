@@ -42,7 +42,7 @@ AUTH_EXT_CAHCE_TIMEOUT  = 30
 #
 auth_htpasswd 		= None
 auth_htpasswd_users 	= list()
-auth_ext_url		= None
+auth_ext_uri		= None
 
 acl_data     		= None
 acl_file_path		= None
@@ -119,13 +119,14 @@ def loadHTPASSWDData(path):
   return False
 
 
-def setExternalServiceURL(url):
+def setExternalServiceURL(uri):
 
-  global auth_ext_url
-  if url == "":
+  global auth_ext_uri
+
+  if uri == "":
     return
   else:
-    auth_ext_url = url
+    auth_ext_uri = uri
 
 
 def loadACLData(path):
@@ -351,13 +352,11 @@ def authenticateUser_HTPASSWD(username, password, allowAnonymous=True):
 
 def authenticateUser_EXTERNAL(username, password):
 
-
   #check if external service's URL is defined, otherwise skip
-  if auth_ext_url == None:
+  if auth_ext_uri == None:
     return False
 
   log.log(log.LOG_DEBUG, "Autenticating user " + username + " using external method")
-
 
   #check if the record exists in the local cache
   try:
@@ -384,9 +383,9 @@ def authenticateUser_EXTERNAL(username, password):
 
   #make an authentication request
   try:
-    resp = requests.get(auth_ext_url, auth=(username, password))
+    resp = requests.get(auth_ext_uri, auth=(username, password))
   except Exception as e:
-    log.log(log.LOG_WARNING, "External auth service at " + auth_ext_url + " responded with error: " + str(e))
+    log.log(log.LOG_WARNING, "External auth service at " + auth_ext_uri + " responded with error: " + str(e))
     return False
 
   #check for response codes
