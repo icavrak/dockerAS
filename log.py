@@ -20,6 +20,11 @@ LOG_WARNING = 0
 
 LOG_LEVEL_TEXT = ["WARNING", "INFO", "DEBUG"]
 
+LOG_OUTPUT_STDOUT = 0
+LOG_OUTPUT_FILE = 1
+
+LOG_STDOUT = "LOG_STDOUT"
+
 #
 #
 #
@@ -27,6 +32,8 @@ LOG_LEVEL_TEXT = ["WARNING", "INFO", "DEBUG"]
 #
 logLevel = LOG_WARNING
 
+logOutput = LOG_OUTPUT_STDOUT 
+logOutputFilename = None
 
 #
 #
@@ -41,6 +48,22 @@ def setLogLevel(loglevel):
 def getLogLevel():
   return logLevel
 
+def setLogOutput(output):
+
+  global logOutput, logOutputFilename
+
+  if output == LOG_STDOUT:
+    logOutput = LOG_OUTPUT_STDOUT 
+    logOutputFilename = None
+
+  else:
+    logOutput = LOG_OUTPUT_FILE
+    logOutputFilename = output
+
+def getLogOutput():
+  return logOutput, logOutputFilename
+
+
 def log(loglevel, message):
 
    #TODO check current log level 
@@ -51,8 +74,16 @@ def log(loglevel, message):
    d = str(datetime.datetime.utcnow())
 
    #create logging string
-   logstring = d + " (" + LOG_LEVEL_TEXT[loglevel] + "): " + message
+   logstring = d + " (" + LOG_LEVEL_TEXT[loglevel] + "): " + message + "\n"
 
    #output log record TODO: log target?
-   print logstring
+   if logOutput == LOG_OUTPUT_STDOUT:
+     try:
+       print logstring
+     except IOError:
+       pass
+   else:
+     with open(logOutputFilename, 'a') as f:
+       f.write(logstring)
+
 

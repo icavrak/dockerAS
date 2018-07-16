@@ -158,7 +158,7 @@ def putJSONACLData(json_acl):
     return False
 
   #rename ACL file to temporary filename (if path is defined)
-  print "==> ACL FILEPATH " + acl_file_path
+  #print "==> ACL FILEPATH " + acl_file_path
 
   if acl_file_path != None:
     success = False
